@@ -33,7 +33,7 @@ class CogntivServer:
         self.num_sent = 0
         self.previous_sent_timestmap = datetime.datetime.now()
 
-    def handle_sigint(self):
+    def handle_sigint(self, fig, frame):
         print('Caught SIGINT, shutting down server...')
         if self.socket_connection:
             self.socket_connection.close()
