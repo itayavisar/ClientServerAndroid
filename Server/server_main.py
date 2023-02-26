@@ -1,10 +1,9 @@
-import socket
+from threading import Thread
 import numpy as np
 import datetime
-import time
-from threading import Thread
+import socket
 import signal
-
+import time
 
 class CogntivServer:
     def __init__(self):
@@ -25,7 +24,7 @@ class CogntivServer:
         self.socket_connection = None
         self.server_socket = None
         self.sending_rate = 1000.0
-        self.data_size = (50, 1)
+        self.data_length = 50
 
         # set statistics parameters
         self.sum_rate = 0
@@ -33,7 +32,7 @@ class CogntivServer:
         self.num_sent = 0
         self.previous_sent_timestmap = datetime.datetime.now()
 
-    def handle_sigint(self, fig, frame):
+    def handle_sigint(self, sig, frame):
         print('Caught SIGINT, shutting down server...')
         if self.socket_connection:
             self.socket_connection.close()
@@ -47,40 +46,29 @@ class CogntivServer:
             self.socket_connection.close()
         self.socket_connection = None
 
-    def server_ctrl(self):
-        print("input for server control:"
-              "\nq: quit")
-        data = input("->\n")
-        if 'q' == data:
-            self.close_server()
-
     def calc_statistics(self):
         return
 
-    def run(self):
-        self.alive = True
-        # thread = Thread(target=self.server_ctrl)
-        # thread.start()
-
-        print(f"host is {self.host}")
+    def openSocket(self):
         self.server_socket = socket.socket()
-        server_socket = self.server_socket
-        server_socket.bind((self.host, self.port))
-        server_socket.listen(1)
-
+        self.server_socket.bind((self.host, self.port))
+        self.server_socket.listen(1)
+        self.alive = True
+    def handleConnection(self):
         while self.alive:
             print("server running, waiting for connection...")
-            self.socket_connection, address = server_socket.accept()  # accept new connection
+            self.socket_connection, address = self.server_socket.accept()  # accept new connection
             self.socket_connection.settimeout(2)
             self.client_connected = True
             print("Connection from: " + str(address))
+
             self.num_sent = 0
             self.sumrate = 0
             self.avg_rate = 0
             try:
                 start_time = time.time()
                 while self.client_connected:
-                    data = np.random.normal(0, 1, self.data_size)
+                    data = np.random.normal(0, 1, self.data_length).astype(np.float32)
                     now = time.time()
                     if self.num_sent > 0:
                         avg_rate = self.num_sent / ((now - start_time) + self.EPSILON)
@@ -88,9 +76,13 @@ class CogntivServer:
                         if self.sending_rate < avg_rate:
                             sleep_time = (1/self.sending_rate) - (1/avg_rate)
                             time.sleep(sleep_time)
+
                     self.socket_connection.send(data)
                     self.num_sent += 1
 
+            except OSError as e:
+                if str(e) == 'Bad file descriptor':
+                    print("The server socket was closed, exit the loop")
             except (ConnectionResetError):
                 print("client close the connection")
             except (TimeoutError):
@@ -98,9 +90,10 @@ class CogntivServer:
             except:
                 print("connection failed")
 
-            finally:
-                self.socket_connection.close()
-
+    def run(self):
+        self.openSocket()
+        thread = Thread(target=self.handleConnection())
+        thread.start()
         thread.join()
         self.close_server()
 
