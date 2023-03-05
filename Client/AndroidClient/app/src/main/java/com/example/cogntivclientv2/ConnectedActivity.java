@@ -13,6 +13,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -79,7 +80,9 @@ public class ConnectedActivity extends AppCompatActivity {
                     try {
                         // create connection
                         serverAddress = getIntent().getStringExtra("ipAddress");
-                        socket = new Socket(InetAddress.getByName(serverAddress), port);
+                        final int timeoutMiliSec = 5000;
+                        socket = new Socket();
+                        socket.connect(new InetSocketAddress(serverAddress, port), timeoutMiliSec);
                         serverConnected = true;
 
                         DataInputStream dataIn = new DataInputStream(socket.getInputStream());
@@ -100,11 +103,11 @@ public class ConnectedActivity extends AppCompatActivity {
                             // update rate on screen
                             now = getMicroSec();
                             if (numReads > 1) {
-                                float rateAcquisition = (float)usecInSec / ((float)now - (float)prevTime);
+                                float rateAcquisition = (float) usecInSec / ((float) now - (float) prevTime);
                                 runOnUiThread(new Runnable() {
                                     @Override
                                     public void run() {
-                                        TextView dataAcquisitionRateTxt = (TextView)findViewById(R.id.rateTxt);
+                                        TextView dataAcquisitionRateTxt = (TextView) findViewById(R.id.rateTxt);
                                         String rateStr = String.format("%.2f", rateAcquisition);
                                         dataAcquisitionRateTxt.setText(rateStr);
                                     }
@@ -115,10 +118,23 @@ public class ConnectedActivity extends AppCompatActivity {
 
                         // server disconnected
                         dataIn.close();
-                    } catch (Exception e) {
-                        System.out.println("Failed to create Socket\n");
+                    } catch (java.net.SocketTimeoutException e)
+                    {
+                        System.out.println("Failed to connect to host " + serverAddress);
+                        e.printStackTrace();
+                    } catch (java.net.UnknownHostException e) {
+                        System.out.println("Failed to create Socket unknown host "+ serverAddress + "- reach timeout");
+                        e.printStackTrace();
+                    } catch (Exception e)
+                    {
+                        System.out.println(e.getMessage());
                         e.printStackTrace();
                     }
+                    finally {
+                        Intent intent = new Intent(ConnectedActivity.this, MainActivity.class);
+                        startActivity(intent);
+                    }
+
                 }
             }
         };
@@ -173,10 +189,11 @@ public class ConnectedActivity extends AppCompatActivity {
                         sharedDataBufferStd.put(dataStopVector);
                         dataAcuisitionThread.interrupt();
                         dataAcuisitionThread = null;
-
-                        socket.shutdownInput();
-                        socket.shutdownOutput();
-                        socket.close();
+                        if (socket.isConnected()) {
+                            socket.shutdownInput();
+                            socket.shutdownOutput();
+                            socket.close();
+                        }
 
                         resetStatistics();
                     } catch (Exception e) {
@@ -279,12 +296,15 @@ public class ConnectedActivity extends AppCompatActivity {
         assert(newSample.length == dataVectorLen);
         for (int i = 0; i < newSample.length; ++i)
         {
+            dataSeriesStd[i] = (float)Math.pow(dataSeriesStd[i], 2);
+            dataSeriesStd[i] += (float)Math.pow(previousSeriesMean[i], 2);
             dataSeriesStd[i] *= numVectorsInMatrix;
-            dataSeriesStd[i] += Math.pow((newSample[i] - previousSeriesMean[i]), 2);
+            dataSeriesStd[i] += (float)Math.pow(newSample[i], 2);
             dataSeriesStd[i] /= (numVectorsInMatrix + 1);
+            dataSeriesStd[i] -= (float)Math.pow(dataSeriesMean[i], 2);
             dataSeriesStd[i] = (float)Math.sqrt((double)dataSeriesStd[i]);
         }
-
+        
         try {
             if (0 < sharedDataBufferStd.remainingCapacity() && ((numAccumulateData -1 ) == numVectorsInMatrix))
             {
