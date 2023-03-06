@@ -67,16 +67,20 @@ class CogntivServer:
             self.avg_rate = 0
             try:
                 start_time = time.time()
+                prev_time = start_time
                 while self.client_connected:
                     data = np.random.normal(0, 1, self.data_length).astype(np.float32)
                     now = time.time()
                     if self.num_sent > 0:
                         avg_rate = self.num_sent / ((now - start_time) + self.EPSILON)
-
+                        periodic_time = now - prev_time
+                        desired_periodic_time = 1 / self.sending_rate
                         if self.sending_rate < avg_rate:
-                            sleep_time = (1/self.sending_rate) - (1/avg_rate)
-                            time.sleep(sleep_time)
+                            sleep_time = desired_periodic_time - periodic_time
+                            if 0 < sleep_time:
+                                time.sleep(sleep_time)
 
+                    prev_time = time.time()
                     self.socket_connection.send(data)
                     self.num_sent += 1
 
@@ -87,8 +91,8 @@ class CogntivServer:
                 print("client close the connection")
             except (TimeoutError):
                 print("connection timeout")
-            except:
-                print("connection failed")
+            except Exception as e:
+                print(f"connection failed {str(e)}")
 
     def run(self):
         self.openSocket()
