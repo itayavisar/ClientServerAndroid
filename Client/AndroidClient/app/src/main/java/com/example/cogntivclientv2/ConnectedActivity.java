@@ -101,34 +101,31 @@ public class ConnectedActivity extends AppCompatActivity {
                         float[] data = new float[dataVectorLen];
 
                         long now = getMicroSec();
-                        long prevTime = now;
+                        long startTime = now;
                         while (serverConnected) {
-                            now = getMicroSec();
-                            float rate = 0;
-                            if (0 < numReceived) {
-                                rate = (float) usecInSec / ((float) now - (float) prevTime);
-                                System.out.println("ITAY DEBUG rate = "+ rate);
-
-                                dataAcquisitionStatistics.addSample(rate);
-                            }
                             receiveData(dataIn, data, totalSize);
-                            prevTime = now;
+                            ++numReceived;
+
+                            // update Data acquisition statistics after filling acquire each matrix
+                            if (0 == ((numReceived + 1) % numAccumulateData)) {
+                                now = getMicroSec();
+                                float rate = (float) (numAccumulateData * usecInSec) / ((float) now - (float) startTime);
+                                dataAcquisitionStatistics.addSample(rate);
+                                startTime = now;
+                            }
 
                             updateStatistics(data);
-                            ++numReceived;
-                            System.out.println("[HandleConnection] number of read vectors = " + numReceived);
+                            //System.out.println("[HandleConnection] number of read vectors = " + numReceived); TODO - use for debug
 
                             // update rate on screen
-                            if (1 < numReceived) {
-                                runOnUiThread(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        TextView dataAcquisitionRateTxt = (TextView) findViewById(R.id.rateTxt);
-                                        String rateStr = String.format("%.2f", dataAcquisitionStatistics.getSample());
-                                        dataAcquisitionRateTxt.setText(rateStr);
-                                    }
-                                });
-                            }
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    TextView dataAcquisitionRateTxt = (TextView) findViewById(R.id.rateTxt);
+                                    String rateStr = String.format("%.2f", dataAcquisitionStatistics.getSample());
+                                    dataAcquisitionRateTxt.setText(rateStr);
+                                }
+                            });
                         }
 
                         // server disconnected
@@ -183,10 +180,10 @@ public class ConnectedActivity extends AppCompatActivity {
                         /// print to result file the matrix statistics
                         resultsFileWriter.println("============= matrix " + numReceived / numAccumulateData + " statistics ================");
                         // write data mean to file
-                        writeStatisticToFile(data, dataVectorLen, "mean");
+                        writeStatisticToFile(data, dataVectorLen, "mean vector");
                         // write data std to file
                         data = sharedDataBufferStd.take();
-                        writeStatisticToFile(data, dataVectorLen, "std");
+                        writeStatisticToFile(data, dataVectorLen, "std vector");
 
                         // write data acuisition statistics to file
                         Statistics dataAquisitionStatistics = sharedDataBufferDataAcquisitionStatistics.take();
