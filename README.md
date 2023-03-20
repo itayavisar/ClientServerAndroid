@@ -16,4 +16,4 @@ computed (across the “temporal” dimension) to file results.txt.
 * In the mainActicity fill the server IP (example 192.168.5.5) and presss connect. make sure to fill the ip address well
 * App will switch to the connection activity and will start receive vectors from server
 * If desired to stop the connection, press disconnect. The statistical and analytical results will be saved in the App files directory at results.txt (e.g: /data/user/0/com.example.cogntivclientv2/files/results.txt)
-* to exit from the application press exit from the main activity, or disconnect from the connection activity and exit again.
+* To exit from the application press exit from the main activity, or disconnect from the connection activity and exit again.
