@@ -10,6 +10,7 @@ import android.widget.TextView;
 
 import java.io.DataInputStream;
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.InetAddress;
@@ -39,8 +40,7 @@ public class ConnectedActivity extends AppCompatActivity {
     final int numAccumulateData = 100; //TODO should be requested from server
 
     /* statistics attributes*/
-    float dataAcuisitionRateMean = 0.0f;
-    float dataAcuisitionRateStd = 0.0f;
+    Statistics dataAcquisitionStatistics = new Statistics();
     float[] dataSeriesMean = new float[dataVectorLen];
     float[] dataSeriesStd = new float[dataVectorLen];
     float[] previousSeriesMean = new float[dataVectorLen];
@@ -55,11 +55,16 @@ public class ConnectedActivity extends AppCompatActivity {
     static final int maxSizeFileBuffer = 10000;
     static BlockingQueue<float[]> sharedDataBufferMean = new ArrayBlockingQueue<float[]>(maxSizeFileBuffer);
     static BlockingQueue<float[]> sharedDataBufferStd = new ArrayBlockingQueue<float[]>(maxSizeFileBuffer);
+    static BlockingQueue<Statistics> sharedDataBufferDataAcquisitionStatistics = new ArrayBlockingQueue<Statistics>(maxSizeFileBuffer);
+
 
     // count the current number of vectors contained in the accumulated matrix
     int numVectorsInMatrix = 0;
 
     final long usecInSec = 1000000;
+
+    // count the number of received data in a session
+    long numReceived = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -78,42 +83,52 @@ public class ConnectedActivity extends AppCompatActivity {
                     resetStatistics();
 
                     try {
+                        /* establish connection and intialization of metadata */
+
                         // create connection
                         serverAddress = getIntent().getStringExtra("ipAddress");
-                        final int timeoutMiliSec = 5000;
+                        final int connectionTimeoutMiliSec = 5000;
                         socket = new Socket();
-                        socket.connect(new InetSocketAddress(serverAddress, port), timeoutMiliSec);
+
+                        // trying to connect to server with 5 seconds timeout
+                        socket.connect(new InetSocketAddress(serverAddress, port), connectionTimeoutMiliSec);
                         serverConnected = true;
 
                         DataInputStream dataIn = new DataInputStream(socket.getInputStream());
+                        numReceived = 0;
 
                         int totalSize = dataVectorLen * elementSize;
                         float[] data = new float[dataVectorLen];
 
-                        long numReads = 0;
                         long now = getMicroSec();
                         long prevTime = now;
-
                         while (serverConnected) {
+                            now = getMicroSec();
+                            float rate = 0;
+                            if (0 < numReceived) {
+                                rate = (float) usecInSec / ((float) now - (float) prevTime);
+                                System.out.println("ITAY DEBUG rate = "+ rate);
+
+                                dataAcquisitionStatistics.addSample(rate);
+                            }
                             receiveData(dataIn, data, totalSize);
+                            prevTime = now;
+
                             updateStatistics(data);
-                            ++numReads;
-                            System.out.println("[HandleConnection] number of read vectors = " + numReads);
+                            ++numReceived;
+                            System.out.println("[HandleConnection] number of read vectors = " + numReceived);
 
                             // update rate on screen
-                            now = getMicroSec();
-                            if (numReads > 1) {
-                                float rateAcquisition = (float) usecInSec / ((float) now - (float) prevTime);
+                            if (1 < numReceived) {
                                 runOnUiThread(new Runnable() {
                                     @Override
                                     public void run() {
                                         TextView dataAcquisitionRateTxt = (TextView) findViewById(R.id.rateTxt);
-                                        String rateStr = String.format("%.2f", rateAcquisition);
+                                        String rateStr = String.format("%.2f", dataAcquisitionStatistics.getSample());
                                         dataAcquisitionRateTxt.setText(rateStr);
                                     }
                                 });
                             }
-                            prevTime = now;
                         }
 
                         // server disconnected
@@ -131,8 +146,9 @@ public class ConnectedActivity extends AppCompatActivity {
                         e.printStackTrace();
                     }
                     finally {
-                        Intent intent = new Intent(ConnectedActivity.this, MainActivity.class);
-                        startActivity(intent);
+                        Intent intent = new Intent();
+                        setResult(RESULT_OK, intent);
+                        finish();
                     }
 
                 }
@@ -143,7 +159,7 @@ public class ConnectedActivity extends AppCompatActivity {
             @Override
             public void run() {
                 try {
-                    // initilize results.txt file
+                    // initialize results.txt file
                     File file = null;
                     if (null == resultsFileWriter) {
                         file = new File(getFilesDir(), filename);
@@ -151,16 +167,30 @@ public class ConnectedActivity extends AppCompatActivity {
 
                     resultsFileWriter = new PrintWriter(file);
                     while (true) {
+                        // stop condition for writing task - if data pushed to mean buffer
+                        // is the stop vector
+
                         float[] data = sharedDataBufferMean.take();
                         if (dataStopVector == data)
                         {
+                            System.out.println("all data written successfully in path: " + getFilesDir() + filename);
                             sharedDataBufferMean.clear();
                             sharedDataBufferStd.clear();
+                            sharedDataBufferDataAcquisitionStatistics.clear();
                             break;
                         }
+
+                        /// print to result file the matrix statistics
+                        resultsFileWriter.println("============= matrix " + numReceived / numAccumulateData + " statistics ================");
+                        // write data mean to file
                         writeStatisticToFile(data, dataVectorLen, "mean");
+                        // write data std to file
                         data = sharedDataBufferStd.take();
                         writeStatisticToFile(data, dataVectorLen, "std");
+
+                        // write data acuisition statistics to file
+                        Statistics dataAquisitionStatistics = sharedDataBufferDataAcquisitionStatistics.take();
+                        writeDataAquisitionStatisticsToFile(dataAquisitionStatistics);
                     }
 
                 } catch (Exception e) {
@@ -177,6 +207,7 @@ public class ConnectedActivity extends AppCompatActivity {
         dataAcuisitionThread.start();
         resultsWriterThread.start();
 
+        // handle disconnection and return to the MainActivity
         disconnectBtn.setOnClickListener(new View.OnClickListener()
         {
             @Override
@@ -203,6 +234,7 @@ public class ConnectedActivity extends AppCompatActivity {
 
                     Intent intent = new Intent(ConnectedActivity.this, MainActivity.class);
                     startActivity(intent);
+                    finish();
                 }
             }
         });
@@ -217,6 +249,13 @@ public class ConnectedActivity extends AppCompatActivity {
         resultsFileWriter.println(" ");
         resultsFileWriter.flush();
     }
+
+    private void writeDataAquisitionStatisticsToFile(Statistics dataAquisitionStatistics)
+    {
+        resultsFileWriter.println("data acquisition rate: " + dataAquisitionStatistics.getSample());
+        resultsFileWriter.println("data acquisition rate mean: " + dataAquisitionStatistics.getMean());
+        resultsFileWriter.println("data acquisition rate std: " + dataAquisitionStatistics.getStd());
+    }
     private void receiveData(DataInputStream dataIn, float[] data, int dataSize) throws IOException {
         byte[] buffer = new byte[dataSize];
         int bytesRead = 0;
@@ -227,6 +266,7 @@ public class ConnectedActivity extends AppCompatActivity {
         }
 
         ByteBuffer byteBuffer = ByteBuffer.wrap(buffer);
+        // data received as little endian and need to reorder bytes
         byteBuffer.order(ByteOrder.LITTLE_ENDIAN);
         FloatBuffer floatBuffer = byteBuffer.asFloatBuffer();
         floatBuffer.get(data);
@@ -246,24 +286,29 @@ public class ConnectedActivity extends AppCompatActivity {
 
     private void resetStatistics()
     {
-        dataAcuisitionRateMean = 0;
-        dataAcuisitionRateStd = 0;
         resetData();
+        dataAcquisitionStatistics.reset();
     }
 
     private void updateStatistics(float[] newSample)
     {
         try {
             updateMeanSeries(newSample);
-            updateVarianceSeries(newSample);
+            updateStdSeries(newSample);
             ++numVectorsInMatrix;
             if (numAccumulateData == numVectorsInMatrix)
             {
+                sharedDataBufferDataAcquisitionStatistics.put(new Statistics(dataAcquisitionStatistics));
                 numVectorsInMatrix = 0;
                 resetData();
             }
         } catch (java.io.IOException e) {
-            System.out.println("Failed save data to file\n");
+            System.out.println("Failed save data to file");
+            e.printStackTrace();
+        }
+        catch (Exception e)
+        {
+            System.out.println("Failed to update Statistics: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -273,17 +318,16 @@ public class ConnectedActivity extends AppCompatActivity {
 
         for (int i = 0; i < newSample.length; ++i)
         {
-            // save previous mean to calculate the accumulated variance
+            // save previous mean to calculate the accumulated std
             previousSeriesMean[i] = dataSeriesMean[i];
-            dataSeriesMean[i] *= numVectorsInMatrix;
-            dataSeriesMean[i] += newSample[i];
-            dataSeriesMean[i] /= (numVectorsInMatrix + 1);
+            dataSeriesMean[i] = Statistics.calcMean(previousSeriesMean[i], numVectorsInMatrix, newSample[i]);
         }
         try {
             if ((0 < sharedDataBufferMean.remainingCapacity()) && ((numAccumulateData - 1) == numVectorsInMatrix))
             {
+                // write data to file only if there is enough place in the buffer. Otherwise,
                 // drop if the Buffer is too big to avoid stack overflow and memory high consumption
-                sharedDataBufferMean.put(dataSeriesMean);
+                sharedDataBufferMean.put(dataSeriesMean.clone());
             }
         } catch (Exception e) {
             System.out.println("Couldn't put data mean to buffer");
@@ -291,25 +335,19 @@ public class ConnectedActivity extends AppCompatActivity {
         }
     }
 
-    private void updateVarianceSeries(float[] newSample)
+    private void updateStdSeries(float[] newSample)
     {
         assert(newSample.length == dataVectorLen);
         for (int i = 0; i < newSample.length; ++i)
         {
-            dataSeriesStd[i] = (float)Math.pow(dataSeriesStd[i], 2);
-            dataSeriesStd[i] += (float)Math.pow(previousSeriesMean[i], 2);
-            dataSeriesStd[i] *= numVectorsInMatrix;
-            dataSeriesStd[i] += (float)Math.pow(newSample[i], 2);
-            dataSeriesStd[i] /= (numVectorsInMatrix + 1);
-            dataSeriesStd[i] -= (float)Math.pow(dataSeriesMean[i], 2);
-            dataSeriesStd[i] = (float)Math.sqrt((double)dataSeriesStd[i]);
+            dataSeriesStd[i] = Statistics.calcStd(dataSeriesStd[i], previousSeriesMean[i], dataSeriesMean[i], numVectorsInMatrix, newSample[i]);
         }
-        
+
         try {
             if (0 < sharedDataBufferStd.remainingCapacity() && ((numAccumulateData -1 ) == numVectorsInMatrix))
             {
                 // drop if the Buffer is too big to avoid stack overflow and memory high consumption
-                sharedDataBufferStd.put(dataSeriesStd);
+                sharedDataBufferStd.put(dataSeriesStd.clone());
             }
         } catch (Exception e) {
             System.out.println("Couldn't put data Std to buffer");
